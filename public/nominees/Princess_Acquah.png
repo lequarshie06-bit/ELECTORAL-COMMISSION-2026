@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <linearGradient id="grad-PA" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c3aed" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#grad-PA)" />
+  <circle cx="200" cy="160" r="85" fill="#ffffff" fill-opacity="0.15" />
+  <circle cx="200" cy="160" r="70" fill="#ffffff" fill-opacity="0.25" />
+  <text x="200" y="180" font-family="system-ui, -apple-system, sans-serif" font-size="64" font-weight="900" fill="#ffffff" text-anchor="middle">PA</text>
+  <rect x="40" y="270" width="320" height="90" rx="16" fill="#ffffff" fill-opacity="0.95" />
+  <text x="200" y="305" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="800" fill="#0f172a" text-anchor="middle">Princess Acquah</text>
+  <text x="200" y="335" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="700" fill="#00923f" text-anchor="middle">UHAS NTDs Advocacy • SOP</text>
+</svg>

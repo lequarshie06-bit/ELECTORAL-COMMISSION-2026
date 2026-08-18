@@ -1,0 +1,6 @@
+{
+  "name": "UHAS NTDs Advocacy club (Ho Chapter)",
+  "description": "Official Confidential Electoral System for UHAS NTDs Advocacy club (Ho Chapter) Executive Elections 2026.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
