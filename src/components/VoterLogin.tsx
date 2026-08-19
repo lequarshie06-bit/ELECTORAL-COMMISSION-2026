@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Shield, KeyRound, AlertCircle, ArrowRight, Lock, HeartHandshake } from 'lucide-react';
 import { ElectionState } from '../types';
 import { validateVoterId } from '../services/storage';
+import { ElectionCountdown } from './ElectionCountdown';
 
 interface VoterLoginProps {
   electionState: ElectionState;
@@ -36,16 +37,23 @@ export const VoterLogin: React.FC<VoterLoginProps> = ({
     <div className="min-h-[85vh] flex items-center justify-center px-4 py-8 bg-slate-50 text-slate-800">
       <div className="max-w-md w-full space-y-6">
         {/* Card Header & Branding */}
-        <div className="text-center space-y-3">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-xl bg-slate-900 text-[#00923f] border-2 border-[#00923f] shadow-md">
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-slate-900 text-[#00923f] border-2 border-[#00923f] shadow-md">
             <Shield className="w-7 h-7" />
           </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight uppercase leading-tight">
-            UHAS NTDs Advocacy club (Ho Chapter)
+          <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight uppercase leading-tight">
+            UHAS-NTD CLUB
           </h1>
-          <p className="text-xs sm:text-sm text-amber-600 font-bold max-w-xs mx-auto uppercase tracking-wider">
-            Electoral Commission 2026
+          <p className="text-xs sm:text-sm text-amber-600 font-extrabold max-w-xs mx-auto uppercase tracking-widest">
+            ELECTORAL COMMISSION
           </p>
+
+          {/* Live Countdown Banner */}
+          {electionState.config.electionTimerActive && electionState.config.electionEndTime && (
+            <div className="pt-2 flex justify-center">
+              <ElectionCountdown config={electionState.config} className="bg-emerald-50 text-emerald-900 border-emerald-300 shadow-sm" />
+            </div>
+          )}
         </div>
 
         {/* Form Container */}

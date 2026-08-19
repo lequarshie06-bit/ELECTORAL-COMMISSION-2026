@@ -1,5 +1,7 @@
 import React from 'react';
 import { Shield, Lock, LogOut, CheckCircle2, UserCheck, GraduationCap } from 'lucide-react';
+import { ElectionConfig } from '../types';
+import { ElectionCountdown } from './ElectionCountdown';
 
 interface NavbarProps {
   currentVoterId: string | null;
@@ -8,6 +10,7 @@ interface NavbarProps {
   onExitAdminMode: () => void;
   onLogoutVoter: () => void;
   electionLocked: boolean;
+  config: ElectionConfig;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,26 +20,41 @@ export const Navbar: React.FC<NavbarProps> = ({
   onExitAdminMode,
   onLogoutVoter,
   electionLocked,
+  config,
 }) => {
   return (
     <header className="h-20 bg-slate-900 text-white flex items-center justify-between px-4 sm:px-10 border-b-4 border-[#00923f] shadow-lg shrink-0 sticky top-0 z-30">
       {/* Brand Header */}
-      <div className="flex items-center space-x-3 sm:space-x-4">
-        <div className="w-10 h-10 bg-[#00923f] rounded-lg flex items-center justify-center font-bold text-xl text-white shadow-md shrink-0 border border-emerald-400">
+      <div className="flex items-center space-x-2.5 sm:space-x-4">
+        <div className="w-10 h-10 bg-[#00923f] rounded-xl flex items-center justify-center font-black text-lg text-white shadow-md shrink-0 border border-emerald-400">
           UHAS
         </div>
         <div className="flex flex-col">
-          <span className="font-extrabold text-sm sm:text-base tracking-tight leading-none text-white uppercase">
-            UHAS NTDs Advocacy club (Ho Chapter)
+          <span className="font-black text-base sm:text-lg tracking-tight leading-none text-white uppercase">
+            UHAS-NTD CLUB
           </span>
-          <span className="text-[10px] sm:text-xs text-amber-400 font-bold uppercase tracking-widest mt-1">
-            Electoral Commission 2026
+          <span className="text-[10px] sm:text-xs text-amber-400 font-extrabold uppercase tracking-widest mt-1">
+            ELECTORAL COMMISSION
           </span>
         </div>
       </div>
 
+      {/* Center/Countdown Display */}
+      {config.electionTimerActive && config.electionEndTime && (
+        <div className="hidden md:flex items-center">
+          <ElectionCountdown config={config} compact={false} className="bg-slate-800/80 text-emerald-400 border-slate-700" />
+        </div>
+      )}
+
       {/* Right Action Controls */}
-      <div className="flex items-center space-x-3 sm:space-x-6">
+      <div className="flex items-center space-x-2.5 sm:space-x-4">
+        {/* Mobile Countdown */}
+        {config.electionTimerActive && config.electionEndTime && (
+          <div className="md:hidden">
+            <ElectionCountdown config={config} compact={true} />
+          </div>
+        )}
+
         {electionLocked && (
           <span className="bg-amber-500/20 text-amber-300 text-xs px-2.5 py-1 rounded-full font-medium border border-amber-500/30 flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>

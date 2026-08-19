@@ -34,10 +34,18 @@ import {
   FileText,
   Quote,
   BookOpen,
+  Menu,
+  ChevronRight,
+  Cloud,
+  LogOut,
+  LayoutDashboard,
+  Key,
+  KeyRound,
 } from 'lucide-react';
-import { Candidate, ElectionState, Position, PositionId, Voter } from '../types';
+import { Candidate, ElectionState, Position, PositionId, Voter, AdminAccount } from '../types';
 import { VoterEmailBroadcast } from './VoterEmailBroadcast';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
+import { ElectionCountdown } from './ElectionCountdown';
 import {
   resetElectionData,
   seedDemoVotes,
@@ -52,6 +60,13 @@ import {
   verifyAdminPin,
   clearAllVoters,
   deleteSpecificVoters,
+  updateAdminPin,
+  resetAdminPinToDefault,
+  addAdministrator,
+  deleteAdministrator,
+  setElectionTimer,
+  isElectionTimeExpired,
+  DEFAULT_ADMINS,
 } from '../services/storage';
 import { compressCandidatePhoto } from '../utils/imageCompressor';
 
@@ -66,9 +81,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onRefreshState,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'analytics' | 'results' | 'candidates' | 'audit' | 'roster' | 'email_broadcast' | 'controls'>('analytics');
+  const [activeTab, setActiveTab] = useState<
+    'analytics' | 'results' | 'candidates' | 'audit' | 'roster' | 'email_broadcast' | 'timer' | 'officers' | 'controls'
+  >('analytics');
   const [voterSearch, setVoterSearch] = useState('');
   const [voterFilter, setVoterFilter] = useState<'ALL' | 'VOTED' | 'PENDING'>('ALL');
+
+  // Mobile Sidebar Drawer State
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Selected Voter IDs for Bulk Unregistration
   const [selectedVoterIds, setSelectedVoterIds] = useState<string[]>([]);
@@ -104,7 +124,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [resetConfirmPin, setResetConfirmPin] = useState('');
   const [resetError, setResetError] = useState<string | null>(null);
 
-  const { voters, votes, candidates, positions, config } = electionState;
+  // Admin PIN management state
+  const [adminPinModalOpen, setAdminPinModalOpen] = useState(false);
+  const [selectedAdminForPin, setSelectedAdminForPin] = useState<AdminAccount | null>(null);
+  const [pinCurrentInput, setPinCurrentInput] = useState('');
+  const [pinNewInput, setPinNewInput] = useState('');
+  const [pinConfirmInput, setPinConfirmInput] = useState('');
+  const [pinManagementMsg, setPinManagementMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Add Administrator Modal & Form State
+  const [addAdminModalOpen, setAddAdminModalOpen] = useState(false);
+  const [newAdminName, setNewAdminName] = useState('');
+  const [newAdminRole, setNewAdminRole] = useState('Electoral Commissioner');
+  const [newAdminPin, setNewAdminPin] = useState('0000');
+  const [addAdminMsg, setAddAdminMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [adminToDelete, setAdminToDelete] = useState<AdminAccount | null>(null);
+
+  // Election Timer State
+  const [timerDateTimeInput, setTimerDateTimeInput] = useState<string>(() => {
+    if (electionState.config.electionEndTime) {
+      try {
+        const d = new Date(electionState.config.electionEndTime);
+        return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      } catch {
+        return '';
+      }
+    }
+    return '';
+  });
+  const [timerMsg, setTimerMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const { voters, votes, candidates, positions, config, admins } = electionState;
+  const currentAdmins: AdminAccount[] = admins && admins.length > 0 ? admins : DEFAULT_ADMINS;
 
   // Turnout Stats Calculation
   const allVoterList: Voter[] = Object.values(voters);
@@ -433,33 +484,277 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     alert('All registered voters have been successfully cleared and unregistered.');
   };
 
+  const navItems = [
+    {
+      id: 'analytics' as const,
+      label: 'Analytics & Turnout',
+      description: 'Live charts & demographic metrics',
+      icon: PieChartIcon,
+      badge: `${turnoutPercentage}%`,
+      badgeColor: 'bg-emerald-100 text-[#00923f]',
+    },
+    {
+      id: 'results' as const,
+      label: 'Live Election Results',
+      description: 'Vote tallies & winner standings',
+      icon: BarChart3,
+      badge: `${votes.length} Votes`,
+      badgeColor: 'bg-amber-100 text-amber-900',
+    },
+    {
+      id: 'candidates' as const,
+      label: 'Nominees & Photos',
+      description: 'Candidate cards, photos & limits',
+      icon: Users,
+      badge: `${candidates.filter((c) => !!c.photoUrl).length}/${candidates.length}`,
+      badgeColor: 'bg-emerald-100 text-emerald-900',
+    },
+    {
+      id: 'audit' as const,
+      label: 'Voter Register & Audit',
+      description: 'Search, filter, and unregister',
+      icon: ShieldCheck,
+      badge: `${totalVotersCount}`,
+      badgeColor: 'bg-slate-100 text-slate-800',
+    },
+    {
+      id: 'roster' as const,
+      label: 'Roster & ID Generator',
+      description: 'Add new voter passcodes & batch codes',
+      icon: Plus,
+    },
+    {
+      id: 'email_broadcast' as const,
+      label: 'File Upload & Broadcast',
+      description: 'CSV/Excel voter ingest & notifications',
+      icon: Mail,
+    },
+    {
+      id: 'timer' as const,
+      label: 'Election Timer & Schedule',
+      description: 'Countdown timer & auto-conclude polls',
+      icon: Clock,
+      badge: config.electionTimerActive ? 'Active' : undefined,
+      badgeColor: 'bg-emerald-100 text-emerald-900',
+    },
+    {
+      id: 'officers' as const,
+      label: 'Commission Chair & Officers',
+      description: 'Add administrators & manage PINs',
+      icon: UserCheck,
+      badge: `${currentAdmins.length} Admins`,
+      badgeColor: 'bg-slate-100 text-slate-800',
+    },
+    {
+      id: 'controls' as const,
+      label: 'Security & System Controls',
+      description: 'Pause election, demo data & factory reset',
+      icon: Settings,
+    },
+  ];
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 text-slate-800">
-      {/* Top Admin Banner */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm relative overflow-hidden">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-200">
-          <div>
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-6 space-y-6 text-slate-800">
+      {/* Mobile Top Navigation Header */}
+      <div className="lg:hidden bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm flex items-center justify-between gap-3 sticky top-16 z-30">
+        <button
+          onClick={() => setMobileSidebarOpen(true)}
+          className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition shadow-sm cursor-pointer"
+        >
+          <Menu className="w-4 h-4 text-emerald-400" />
+          <span>Admin Menus</span>
+        </button>
+
+        <div className="flex items-center gap-2 truncate">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+          <span className="text-xs font-extrabold text-slate-900 uppercase truncate">
+            {navItems.find((n) => n.id === activeTab)?.label}
+          </span>
+        </div>
+      </div>
+
+      {/* Mobile Slide-Over Drawer Navigation */}
+      {mobileSidebarOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden flex">
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+
+          {/* Drawer Panel */}
+          <div className="relative w-full max-w-xs bg-white h-full shadow-2xl flex flex-col justify-between p-5 overflow-y-auto z-10">
+            <div className="space-y-6">
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-slate-900 text-[#00923f] flex items-center justify-center font-black">
+                    <ShieldCheck className="w-5 h-5 text-[#00923f]" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-black text-slate-900 uppercase">UHAS-NTD CLUB</h3>
+                    <span className="text-[10px] text-amber-600 font-extrabold uppercase">ELECTORAL COMMISSION</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setMobileSidebarOpen(false)}
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Cloud Sync Status */}
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center justify-between text-[11px]">
+                <div className="flex items-center gap-1.5 text-emerald-900 font-bold">
+                  <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Cloud Persistence</span>
+                </div>
+                <span className="px-1.5 py-0.5 bg-emerald-200 text-emerald-950 font-extrabold rounded text-[9px] uppercase">
+                  Active
+                </span>
+              </div>
+
+              {/* Navigation Menu List */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2">
+                  Navigation Menus
+                </span>
+                {navItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setActiveTab(item.id);
+                        setMobileSidebarOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between cursor-pointer ${
+                        isActive
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Icon className={`w-4 h-4 ${isActive ? 'text-[#00923f]' : 'text-slate-500'}`} />
+                        <span>{item.label}</span>
+                      </div>
+                      {item.badge && (
+                        <span
+                          className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                            isActive ? 'bg-slate-800 text-emerald-300' : item.badgeColor || 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Drawer Footer Actions */}
+            <div className="pt-4 border-t border-slate-100 space-y-2">
+              <button
+                onClick={handleToggleLock}
+                className={`w-full py-2.5 px-3 rounded-lg text-xs font-bold uppercase tracking-wider border transition flex items-center justify-center gap-2 cursor-pointer ${
+                  config.isLocked
+                    ? 'bg-amber-50 text-amber-800 border-amber-300'
+                    : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                }`}
+              >
+                {config.isLocked ? <Lock className="w-3.5 h-3.5 text-amber-600" /> : <Unlock className="w-3.5 h-3.5 text-emerald-600" />}
+                <span>{config.isLocked ? 'Voting Paused' : 'Voting Active'}</span>
+              </button>
+
+              <button
+                onClick={onExitAdmin}
+                className="w-full py-2.5 px-3 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 text-slate-700 rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Exit Admin Mode</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Responsive Layout: Left Sidebar (Desktop) + Right Content Area */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Desktop Sidebar */}
+        <aside className="hidden lg:block lg:col-span-3 bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-6 sticky top-20">
+          {/* Brand Header */}
+          <div className="pb-4 border-b border-slate-100 space-y-2">
             <div className="flex items-center gap-2">
-              <span className="bg-slate-900 text-[#00923f] text-[10px] font-bold px-3 py-1 rounded border border-slate-800 font-mono flex items-center gap-1.5 uppercase tracking-widest">
-                <ShieldCheck className="w-3.5 h-3.5 text-[#00923f]" />
-                ADMINISTRATIVE CONTROL PANEL
-              </span>
-              <span className="text-xs text-amber-600 font-bold uppercase tracking-wider">
-                UHAS NTDs ADVOCACY CLUB (HO CHAPTER)
+              <span className="bg-slate-900 text-[#00923f] text-[9px] font-bold px-2.5 py-1 rounded font-mono uppercase tracking-widest flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3" />
+                ADMIN PANEL
               </span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-2 tracking-tight uppercase">
-              Electoral Commission 2026
-            </h1>
-            <p className="text-sm text-slate-500 mt-1 font-medium">
-              Restricted portal for real-time turnout metrics, candidate management, and voter code audit exports.
+            <h2 className="text-base font-black text-slate-900 tracking-tight uppercase leading-tight">
+              UHAS-NTD CLUB
+            </h2>
+            <p className="text-[11px] text-amber-600 font-extrabold uppercase tracking-wider">
+              ELECTORAL COMMISSION
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          {/* Cloud Synchronization Status Indicator */}
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 text-emerald-950 font-bold">
+              <Cloud className="w-4 h-4 text-emerald-600 animate-pulse" />
+              <span>Cloud Storage</span>
+            </div>
+            <span className="px-2 py-0.5 bg-emerald-200 text-emerald-900 font-extrabold rounded text-[10px] uppercase tracking-wide">
+              Online & Synced
+            </span>
+          </div>
+
+          {/* Vertical Menu Items */}
+          <nav className="space-y-1.5">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 block mb-1">
+              Admin Navigation
+            </span>
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id)}
+                  className={`w-full text-left px-3.5 py-3 rounded-xl text-xs font-bold transition flex items-center justify-between group cursor-pointer ${
+                    isActive
+                      ? 'bg-slate-900 text-white shadow-md'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <Icon className={`w-4 h-4 transition ${isActive ? 'text-[#00923f]' : 'text-slate-400 group-hover:text-slate-700'}`} />
+                    <span className="truncate">{item.label}</span>
+                  </div>
+                  {item.badge ? (
+                    <span
+                      className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md ${
+                        isActive ? 'bg-slate-800 text-emerald-300' : item.badgeColor || 'bg-slate-100 text-slate-700'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  ) : (
+                    <ChevronRight className={`w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition ${isActive ? 'opacity-100 text-slate-400' : 'text-slate-400'}`} />
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Quick System Action Buttons in Sidebar */}
+          <div className="pt-4 border-t border-slate-100 space-y-2">
             <button
               onClick={handleToggleLock}
-              className={`px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider border transition flex items-center gap-2 cursor-pointer ${
+              className={`w-full py-2.5 px-3 rounded-lg text-xs font-bold uppercase tracking-wider border transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs ${
                 config.isLocked
                   ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
                   : 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
@@ -467,191 +762,116 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             >
               {config.isLocked ? (
                 <>
-                  <Lock className="w-4 h-4 text-amber-600" />
-                  <span>Voting Paused (Click to Resume)</span>
+                  <Lock className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Resume Voting</span>
                 </>
               ) : (
                 <>
-                  <Unlock className="w-4 h-4 text-emerald-600" />
-                  <span>Voting Active (Click to Pause)</span>
+                  <Unlock className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Pause Voting</span>
                 </>
               )}
             </button>
 
             <button
               onClick={handleDownloadVoterCodesCSV}
-              className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-sm"
+              className="w-full py-2.5 px-3 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
             >
-              <FileSpreadsheet className="w-4 h-4 text-amber-300" />
-              <span>Download Voter Codes (CSV)</span>
+              <FileSpreadsheet className="w-3.5 h-3.5 text-amber-300" />
+              <span>Voter Codes (CSV)</span>
             </button>
 
             <button
               onClick={handleExportCSV}
-              className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white border border-slate-900 rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center gap-2 cursor-pointer shadow-sm"
+              className="w-full py-2.5 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
             >
-              <Download className="w-4 h-4 text-amber-400" />
-              <span className="hidden sm:inline">Export Full Audit CSV</span>
+              <Download className="w-3.5 h-3.5 text-amber-400" />
+              <span>Full Audit Report (CSV)</span>
+            </button>
+
+            <button
+              onClick={onExitAdmin}
+              className="w-full py-2.5 px-3 bg-slate-50 hover:bg-rose-50 hover:text-rose-700 text-slate-600 rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center justify-center gap-2 cursor-pointer border border-slate-200 mt-2"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Exit Admin Portal</span>
             </button>
           </div>
-        </div>
+        </aside>
 
-        {/* Turnout KPI Metrics Cards */}
-        <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex items-center justify-between shadow-xs">
-            <div>
-              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Total Turnout</span>
-              <span className="text-2xl font-black text-slate-900 font-mono mt-1 block">
-                {votedCount} / {totalVotersCount}
-              </span>
-              <span className="text-xs text-[#00923f] font-bold">{turnoutPercentage}% Cast</span>
+        {/* Right Main Content Area */}
+        <main className="lg:col-span-9 space-y-6 min-w-0">
+          {/* Top Admin Summary Banner */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 shadow-sm relative overflow-hidden">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+              <div>
+                <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight uppercase">
+                  {navItems.find((n) => n.id === activeTab)?.label}
+                </h1>
+                <p className="text-xs text-slate-500 mt-0.5 font-medium">
+                  {navItems.find((n) => n.id === activeTab)?.description}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className={`text-[11px] font-bold px-3 py-1 rounded-full flex items-center gap-1.5 ${
+                  config.isLocked ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                }`}>
+                  <span className={`w-2 h-2 rounded-full ${config.isLocked ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`}></span>
+                  {config.isLocked ? 'Voting Paused' : 'Voting Active'}
+                </span>
+                <span className="text-xs font-mono font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg">
+                  Turnout: {turnoutPercentage}%
+                </span>
+              </div>
             </div>
-            <div className="p-3 bg-slate-900 rounded-xl text-[#00923f]">
-              <TrendingUp className="w-6 h-6" />
+
+            {/* Turnout KPI Metrics Cards */}
+            <div className="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl shadow-2xs">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Turnout</span>
+                <span className="text-xl font-black text-slate-900 font-mono mt-0.5 block">
+                  {votedCount} / {totalVotersCount}
+                </span>
+                <span className="text-[11px] text-[#00923f] font-bold">{turnoutPercentage}% Cast</span>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl shadow-2xs">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Ballots</span>
+                <span className="text-xl font-black text-slate-900 font-mono mt-0.5 block">
+                  {votes.length}
+                </span>
+                <span className="text-[11px] text-emerald-700 font-bold">Processed</span>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl shadow-2xs">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Pending</span>
+                <span className="text-xl font-black text-slate-900 font-mono mt-0.5 block">
+                  {pendingCount}
+                </span>
+                <span className="text-[11px] text-amber-700 font-bold">Awaiting</span>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl shadow-2xs">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Cloud Sync</span>
+                <span className="text-sm font-extrabold text-emerald-700 mt-1 block uppercase flex items-center gap-1">
+                  <Cloud className="w-3.5 h-3.5" />
+                  Synced
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono">Real-time</span>
+              </div>
+            </div>
+
+            {/* Turnout Progress Bar */}
+            <div className="mt-3 pt-2">
+              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden border border-slate-200">
+                <div
+                  className="bg-[#00923f] h-full transition-all duration-500"
+                  style={{ width: `${turnoutPercentage}%` }}
+                ></div>
+              </div>
             </div>
           </div>
-
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex items-center justify-between shadow-xs">
-            <div>
-              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Anonymous Votes</span>
-              <span className="text-2xl font-black text-slate-900 font-mono mt-1 block">
-                {votes.length}
-              </span>
-              <span className="text-xs text-emerald-700 font-bold">Ballots Processed</span>
-            </div>
-            <div className="p-3 bg-slate-900 rounded-xl text-emerald-400">
-              <UserCheck className="w-6 h-6" />
-            </div>
-          </div>
-
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex items-center justify-between shadow-xs">
-            <div>
-              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Pending Voters</span>
-              <span className="text-2xl font-black text-slate-900 font-mono mt-1 block">
-                {pendingCount}
-              </span>
-              <span className="text-xs text-amber-700 font-bold">Awaiting Submission</span>
-            </div>
-            <div className="p-3 bg-slate-900 rounded-xl text-amber-400">
-              <Clock className="w-6 h-6" />
-            </div>
-          </div>
-
-          <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex items-center justify-between shadow-xs">
-            <div>
-              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">System Status</span>
-              <span className="text-lg font-extrabold text-slate-900 mt-1 block uppercase">
-                {config.isLocked ? 'PAUSED' : 'OPEN'}
-              </span>
-              <span className="text-xs text-slate-500 font-medium font-mono">UHAS Electoral Portal</span>
-            </div>
-            <div className="p-3 bg-slate-900 rounded-xl text-amber-400">
-              <ShieldCheck className="w-6 h-6" />
-            </div>
-          </div>
-        </div>
-
-        {/* Turnout Progress Gauge */}
-        <div className="mt-4 pt-2">
-          <div className="flex justify-between items-center text-xs text-slate-600 font-medium mb-1.5">
-            <span>Overall Turnout Progress Gauge</span>
-            <span className="font-mono text-[#00923f] font-bold">{turnoutPercentage}% Complete</span>
-          </div>
-          <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden border border-slate-200">
-            <div
-              className="bg-[#00923f] h-full transition-all duration-500"
-              style={{ width: `${turnoutPercentage}%` }}
-            ></div>
-          </div>
-        </div>
-      </div>
-
-      {/* Admin Navigation Tabs */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2">
-        <button
-          onClick={() => setActiveTab('analytics')}
-          className={`px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
-            activeTab === 'analytics'
-              ? 'bg-slate-900 text-white shadow-sm'
-              : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <PieChartIcon className="w-4 h-4 text-[#00923f]" />
-          <span>Analytics & Visual Charts</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('results')}
-          className={`px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
-            activeTab === 'results'
-              ? 'bg-slate-900 text-white shadow-sm'
-              : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <BarChart3 className="w-4 h-4 text-amber-400" />
-          <span>Real-Time Results</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('candidates')}
-          className={`px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
-            activeTab === 'candidates'
-              ? 'bg-slate-900 text-white shadow-sm'
-              : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <Users className="w-4 h-4 text-[#00923f]" />
-          <span>Candidates & Limits ({candidates.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('audit')}
-          className={`px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
-            activeTab === 'audit'
-              ? 'bg-slate-900 text-white shadow-sm'
-              : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <ShieldCheck className="w-4 h-4 text-amber-400" />
-          <span>Voter Audit ({allVoterList.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('roster')}
-          className={`px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
-            activeTab === 'roster'
-              ? 'bg-slate-900 text-white shadow-sm'
-              : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <Plus className="w-4 h-4 text-[#00923f]" />
-          <span>Roster & ID Generator</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('email_broadcast')}
-          className={`px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
-            activeTab === 'email_broadcast'
-              ? 'bg-slate-900 text-white shadow-sm'
-              : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <Mail className="w-4 h-4 text-[#00923f]" />
-          <span>CSV/XLSX Upload & Email Broadcast</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('controls')}
-          className={`px-4 py-2.5 rounded-lg font-bold text-xs uppercase tracking-wider transition flex items-center gap-2 cursor-pointer ${
-            activeTab === 'controls'
-              ? 'bg-slate-900 text-white shadow-sm'
-              : 'bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200'
-          }`}
-        >
-          <Dices className="w-4 h-4 text-amber-400" />
-          <span>Electoral Tools & Reset</span>
-        </button>
-      </div>
 
       {/* TAB 0: ANALYTICS DASHBOARD WITH CHARTS & REPORT */}
       {activeTab === 'analytics' && (
@@ -1414,53 +1634,413 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* TAB 5: ELECTORAL TOOLS & RESET */}
-      {activeTab === 'controls' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Seed Demo Votes */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-4">
-            <h2 className="text-lg font-extrabold text-slate-900 uppercase tracking-tight flex items-center gap-2">
-              <Dices className="w-5 h-5 text-[#00923f]" />
-              Simulate Demo Votes
-            </h2>
-            <p className="text-xs text-slate-500 font-medium">
-              Instantly cast random anonymous votes for pending voters to test live turnout charts and election analytics.
-            </p>
+      {/* TAB 5: ELECTION COUNTDOWN TIMER & SCHEDULE */}
+      {activeTab === 'timer' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-slate-900 text-amber-300 text-[10px] font-extrabold px-2.5 py-1 rounded font-mono uppercase tracking-wider">
+                    Electoral Schedule
+                  </span>
+                  {config.electionTimerActive && config.electionEndTime && (
+                    <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-300 animate-pulse uppercase">
+                      Timer Active
+                    </span>
+                  )}
+                </div>
+                <h2 className="text-lg sm:text-xl font-black text-slate-900 mt-1 uppercase tracking-tight flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-[#00923f]" />
+                  Election Auto-Conclusion Timer
+                </h2>
+                <p className="text-xs text-slate-500 font-medium max-w-2xl">
+                  Set a live official conclusion timestamp for the election. When the timer hits 00:00:00, voting automatically closes across all voter portals and new ballots are blocked.
+                </p>
+              </div>
 
-            <div className="flex flex-wrap gap-2 pt-2">
-              {[5, 10, 20].map((num) => (
-                <button
-                  key={num}
-                  onClick={() => handleSeedVotes(num)}
-                  className="px-4 py-2 bg-slate-50 hover:bg-emerald-50 text-emerald-900 border border-slate-200 hover:border-[#00923f] rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer"
-                >
-                  + Seed {num} Votes
-                </button>
-              ))}
+              {config.electionTimerActive && config.electionEndTime && (
+                <div className="shrink-0">
+                  <ElectionCountdown config={config} className="bg-emerald-50 border-emerald-300" />
+                </div>
+              )}
             </div>
-          </div>
 
-          {/* Reset Election Data */}
-          <div className="bg-white border border-rose-200 rounded-xl p-6 shadow-sm space-y-4">
-            <h2 className="text-lg font-extrabold text-rose-700 uppercase tracking-tight flex items-center gap-2">
-              <RotateCcw className="w-5 h-5 text-rose-600" />
-              Reset Election Data
-            </h2>
-            <p className="text-xs text-slate-500 font-medium">
-              Clear all cast votes, reset voter status back to PENDING, and restore initial configuration.
-            </p>
+            {/* Current Schedule Status Card */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Timer Status
+                </span>
+                <p className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+                  {config.electionTimerActive ? (
+                    <span className="text-[#00923f] flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-[#00923f] animate-pulse"></span>
+                      Active & Running
+                    </span>
+                  ) : (
+                    <span className="text-slate-500 flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-slate-400"></span>
+                      Not Active (Manual Mode)
+                    </span>
+                  )}
+                </p>
+              </div>
 
-            <button
-              onClick={() => setShowResetModal(true)}
-              className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Target Concluding Time
+                </span>
+                <p className="text-sm font-bold font-mono text-slate-800">
+                  {config.electionEndTime
+                    ? new Date(config.electionEndTime).toLocaleString('en-GB', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short',
+                      })
+                    : 'No end time set'}
+                </p>
+              </div>
+
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Enforcement Rule
+                </span>
+                <p className="text-xs font-semibold text-slate-700 leading-tight">
+                  {isElectionTimeExpired(config)
+                    ? '⚠️ Polls Expired - Voting Blocked'
+                    : config.electionTimerActive
+                    ? 'Auto-locks when timer reaches zero'
+                    : 'Manual Admin Pause / Lock'}
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Preset Durations */}
+            <div className="space-y-2 pt-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                Quick Duration Presets (From Now):
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { label: '+15 Minutes', minutes: 15 },
+                  { label: '+30 Minutes', minutes: 30 },
+                  { label: '+1 Hour', minutes: 60 },
+                  { label: '+2 Hours', minutes: 120 },
+                  { label: '+4 Hours', minutes: 240 },
+                  { label: '+8 Hours', minutes: 480 },
+                  { label: '+12 Hours', minutes: 720 },
+                  { label: '+24 Hours', minutes: 1440 },
+                ].map((preset) => (
+                  <button
+                    key={preset.minutes}
+                    type="button"
+                    onClick={() => {
+                      const targetDate = new Date(Date.now() + preset.minutes * 60 * 1000);
+                      const iso = targetDate.toISOString();
+                      const localString = new Date(targetDate.getTime() - targetDate.getTimezoneOffset() * 60000)
+                        .toISOString()
+                        .slice(0, 16);
+                      setTimerDateTimeInput(localString);
+                      const updated = setElectionTimer(iso, true);
+                      onRefreshState(updated);
+                      setTimerMsg({
+                        type: 'success',
+                        text: `Election timer set for ${preset.label} (Ends at ${targetDate.toLocaleTimeString()}).`,
+                      });
+                      setTimeout(() => setTimerMsg(null), 4000);
+                    }}
+                    className="px-3.5 py-2 bg-slate-100 hover:bg-emerald-50 hover:text-emerald-900 hover:border-[#00923f] border border-slate-200 rounded-lg text-xs font-bold transition cursor-pointer"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Custom Date & Time Configuration Form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!timerDateTimeInput) {
+                  setTimerMsg({ type: 'error', text: 'Please pick a valid concluding date and time.' });
+                  return;
+                }
+                const chosenTimestamp = new Date(timerDateTimeInput).getTime();
+                if (isNaN(chosenTimestamp) || chosenTimestamp <= Date.now()) {
+                  setTimerMsg({
+                    type: 'error',
+                    text: 'The concluding time must be set to a future date & time.',
+                  });
+                  return;
+                }
+                const iso = new Date(timerDateTimeInput).toISOString();
+                const updated = setElectionTimer(iso, true);
+                onRefreshState(updated);
+                setTimerMsg({
+                  type: 'success',
+                  text: `Election schedule updated! Polls will auto-close on ${new Date(
+                    timerDateTimeInput
+                  ).toLocaleString()}.`,
+                });
+                setTimeout(() => setTimerMsg(null), 4000);
+              }}
+              className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4"
             >
-              Reset Election (Requires Admin Passcode)
-            </button>
+              <h3 className="text-xs font-bold uppercase text-slate-800 flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-[#00923f]" />
+                <span>Or Pick Exact Date & Time:</span>
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                    Poll Closing Date & Time (Local Time)
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={timerDateTimeInput}
+                    onChange={(e) => setTimerDateTimeInput(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-lg text-sm font-mono text-slate-900 outline-none focus:border-[#00923f]"
+                  />
+                </div>
+
+                <div className="flex items-end gap-2">
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-amber-300 rounded-lg text-xs font-bold uppercase tracking-wider transition shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Save className="w-4 h-4 text-amber-400" />
+                    <span>Apply & Start Timer</span>
+                  </button>
+
+                  {config.electionTimerActive && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm('Are you sure you want to stop and clear the active election timer?')) {
+                          const updated = setElectionTimer(null, false);
+                          onRefreshState(updated);
+                          setTimerMsg({ type: 'success', text: 'Election timer stopped. Voting is in manual mode.' });
+                          setTimeout(() => setTimerMsg(null), 4000);
+                        }
+                      }}
+                      className="py-2.5 px-4 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+                    >
+                      Clear Timer
+                    </button>
+                  )}
+                </div>
+              </div>
+            </form>
+
+            {timerMsg && (
+              <div
+                className={`p-3.5 rounded-xl border text-xs font-bold flex items-center gap-2 ${
+                  timerMsg.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                }`}
+              >
+                {timerMsg.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{timerMsg.text}</span>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* TAB 6: EMAIL BROADCAST & SPREADSHEET UPLOAD */}
+      {/* TAB 6: COMMISSION CHAIR & OFFICERS MANAGEMENT */}
+      {activeTab === 'officers' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-slate-900 text-[#00923f] text-[10px] font-extrabold px-2.5 py-1 rounded font-mono uppercase tracking-wider">
+                    Governance & Access
+                  </span>
+                  <span className="bg-slate-100 text-slate-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200">
+                    {currentAdmins.length} Registered Officer(s)
+                  </span>
+                </div>
+                <h2 className="text-lg sm:text-xl font-black text-slate-900 mt-1 uppercase tracking-tight flex items-center gap-2">
+                  <UserCheck className="w-5 h-5 text-[#00923f]" />
+                  Commission Chair & Administrators Portal
+                </h2>
+                <p className="text-xs text-slate-500 font-medium max-w-2xl">
+                  From here, the Commission Chair can dynamically register additional administrators, assign designated roles, manage confidential PIN codes, or revoke administrative access.
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  setNewAdminName('');
+                  setNewAdminRole('Electoral Commissioner');
+                  setNewAdminPin(Math.floor(1000 + Math.random() * 9000).toString());
+                  setAddAdminMsg(null);
+                  setAddAdminModalOpen(true);
+                }}
+                className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-300 rounded-xl text-xs font-bold uppercase tracking-wider shadow-sm flex items-center justify-center gap-2 cursor-pointer transition shrink-0"
+              >
+                <Plus className="w-4 h-4 text-amber-400" />
+                <span>Add Administrator</span>
+              </button>
+            </div>
+
+            {/* Administrators Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {currentAdmins.map((adm, idx) => {
+                const isChair = adm.id === 'admin-chair' || adm.id === 'admin-1' || idx === 0;
+
+                return (
+                  <div
+                    key={adm.id}
+                    className={`p-5 rounded-2xl border flex flex-col justify-between space-y-4 shadow-xs transition ${
+                      isChair
+                        ? 'bg-slate-900 text-white border-slate-800'
+                        : 'bg-slate-50 text-slate-800 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span
+                          className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded font-mono uppercase tracking-wider ${
+                            isChair
+                              ? 'bg-amber-400 text-slate-950'
+                              : 'bg-slate-200 text-slate-800'
+                          }`}
+                        >
+                          {isChair ? 'Commission Chair' : `Officer ${idx + 1}`}
+                        </span>
+
+                        <span
+                          className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                            isChair
+                              ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              : 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                          }`}
+                        >
+                          Authorized Access
+                        </span>
+                      </div>
+
+                      <div className="pt-1">
+                        <h3
+                          className={`text-base font-black tracking-tight ${
+                            isChair ? 'text-white' : 'text-slate-900'
+                          }`}
+                        >
+                          {adm.name}
+                        </h3>
+                        <p
+                          className={`text-xs font-bold ${
+                            isChair ? 'text-emerald-400' : 'text-[#00923f]'
+                          }`}
+                        >
+                          {adm.role}
+                        </p>
+                      </div>
+
+                      <p
+                        className={`text-[10px] font-mono ${
+                          isChair ? 'text-slate-400' : 'text-slate-400'
+                        }`}
+                      >
+                        Registered: {adm.updatedAt ? new Date(adm.updatedAt).toLocaleDateString() : 'Active'}
+                      </p>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-200/40 flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setSelectedAdminForPin(adm);
+                          setPinCurrentInput('');
+                          setPinNewInput('');
+                          setPinConfirmInput('');
+                          setPinManagementMsg(null);
+                          setAdminPinModalOpen(true);
+                        }}
+                        className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold uppercase tracking-wider transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                          isChair
+                            ? 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700'
+                            : 'bg-slate-900 hover:bg-slate-800 text-white'
+                        }`}
+                      >
+                        <Key className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Change PIN</span>
+                      </button>
+
+                      {!isChair && (
+                        <button
+                          onClick={() => setAdminToDelete(adm)}
+                          className="p-2 bg-white border border-slate-300 hover:bg-rose-50 hover:text-rose-700 text-rose-600 rounded-lg transition cursor-pointer text-xs font-bold"
+                          title="Remove Administrator"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 7: ELECTORAL TOOLS, SYSTEM CONTROLS & RESET */}
+      {activeTab === 'controls' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Seed Demo Votes */}
+            <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm space-y-4">
+              <h2 className="text-lg font-extrabold text-slate-900 uppercase tracking-tight flex items-center gap-2">
+                <Dices className="w-5 h-5 text-[#00923f]" />
+                Simulate Demo Votes
+              </h2>
+              <p className="text-xs text-slate-500 font-medium">
+                Instantly cast random anonymous votes for pending voters to test live turnout charts and election analytics.
+              </p>
+
+              <div className="flex flex-wrap gap-2 pt-2">
+                {[5, 10, 20].map((num) => (
+                  <button
+                    key={num}
+                    onClick={() => handleSeedVotes(num)}
+                    className="px-4 py-2 bg-slate-50 hover:bg-emerald-50 text-emerald-900 border border-slate-200 hover:border-[#00923f] rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+                  >
+                    + Seed {num} Votes
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Reset Election Data */}
+            <div className="bg-white border border-rose-200 rounded-xl p-6 shadow-sm space-y-4">
+              <h2 className="text-lg font-extrabold text-rose-700 uppercase tracking-tight flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-rose-600" />
+                Reset Election Data
+              </h2>
+              <p className="text-xs text-slate-500 font-medium">
+                Clear all cast votes, reset voter status back to PENDING, and restore initial configuration.
+              </p>
+
+              <button
+                onClick={() => setShowResetModal(true)}
+                className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-lg text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+              >
+                Reset Election (Requires Admin Passcode)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 8: EMAIL BROADCAST & SPREADSHEET UPLOAD */}
       {activeTab === 'email_broadcast' && (
         <VoterEmailBroadcast
           electionState={electionState}
@@ -2030,6 +2610,323 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* Change Admin PIN Modal */}
+      {adminPinModalOpen && selectedAdminForPin && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 text-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-slate-900 text-amber-300 flex items-center justify-center">
+                  <Key className="w-4 h-4 text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-slate-900 uppercase tracking-tight">
+                    Change Administrator PIN
+                  </h3>
+                  <span className="text-[11px] text-[#00923f] font-bold">
+                    {selectedAdminForPin.name} ({selectedAdminForPin.role})
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setAdminPinModalOpen(false);
+                  setSelectedAdminForPin(null);
+                  setPinManagementMsg(null);
+                }}
+                className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setPinManagementMsg(null);
+                if (pinNewInput !== pinConfirmInput) {
+                  setPinManagementMsg({ type: 'error', text: 'New PIN and confirmation PIN do not match.' });
+                  return;
+                }
+                if (pinNewInput.length < 4) {
+                  setPinManagementMsg({ type: 'error', text: 'New PIN must be at least 4 characters.' });
+                  return;
+                }
+                const res = updateAdminPin(selectedAdminForPin.id, pinCurrentInput, pinNewInput);
+                if (res.success && res.updatedState) {
+                  onRefreshState(res.updatedState);
+                  setPinManagementMsg({ type: 'success', text: res.message });
+                  setTimeout(() => {
+                    setAdminPinModalOpen(false);
+                    setSelectedAdminForPin(null);
+                    setPinManagementMsg(null);
+                  }, 1500);
+                } else {
+                  setPinManagementMsg({ type: 'error', text: res.message });
+                }
+              }}
+              className="space-y-3 pt-1"
+            >
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                  Current PIN Code
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={pinCurrentInput}
+                  onChange={(e) => setPinCurrentInput(e.target.value)}
+                  placeholder="Enter current PIN"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono tracking-widest text-center text-sm outline-none focus:border-[#00923f]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                  New Secret PIN Code
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={pinNewInput}
+                  onChange={(e) => setPinNewInput(e.target.value)}
+                  placeholder="Enter new PIN (min 4 digits)"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono tracking-widest text-center text-sm outline-none focus:border-[#00923f]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                  Confirm New Secret PIN
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={pinConfirmInput}
+                  onChange={(e) => setPinConfirmInput(e.target.value)}
+                  placeholder="Repeat new PIN"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono tracking-widest text-center text-sm outline-none focus:border-[#00923f]"
+                />
+              </div>
+
+              {pinManagementMsg && (
+                <div
+                  className={`p-3 rounded-lg text-xs font-bold flex items-center gap-2 ${
+                    pinManagementMsg.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                      : 'bg-rose-50 text-rose-800 border border-rose-200'
+                  }`}
+                >
+                  {pinManagementMsg.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  )}
+                  <span>{pinManagementMsg.text}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminPinModalOpen(false);
+                    setSelectedAdminForPin(null);
+                    setPinManagementMsg(null);
+                  }}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold uppercase tracking-wider cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-amber-300 rounded-lg text-xs font-bold uppercase tracking-wider shadow-sm flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Save className="w-4 h-4 text-amber-400" />
+                  <span>Update PIN Code</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add New Administrator Modal */}
+      {addAdminModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 text-slate-900">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-[#00923f]" />
+                <h3 className="text-base font-extrabold text-slate-900 uppercase tracking-tight">
+                  Register New Administrator
+                </h3>
+              </div>
+              <button
+                onClick={() => setAddAdminModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 font-medium">
+              Only committee members registered here by the Commission Chair will be permitted to access the administrative portal.
+            </p>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setAddAdminMsg(null);
+                const res = addAdministrator(newAdminName, newAdminRole, newAdminPin);
+                if (res.success && res.updatedState) {
+                  onRefreshState(res.updatedState);
+                  setAddAdminMsg({ type: 'success', text: res.message });
+                  setTimeout(() => {
+                    setAddAdminModalOpen(false);
+                    setAddAdminMsg(null);
+                  }, 1200);
+                } else {
+                  setAddAdminMsg({ type: 'error', text: res.message });
+                }
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                  Full Name / Title *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newAdminName}
+                  onChange={(e) => setNewAdminName(e.target.value)}
+                  placeholder="e.g. Dr. Kwame Mensah / Jane Doe"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 outline-none focus:border-[#00923f]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-700 mb-1">
+                  Official Role / Designation
+                </label>
+                <input
+                  type="text"
+                  value={newAdminRole}
+                  onChange={(e) => setNewAdminRole(e.target.value)}
+                  placeholder="e.g. Electoral Commissioner / Returning Officer"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 outline-none focus:border-[#00923f]"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold uppercase text-slate-700">
+                    Designated PIN Code *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setNewAdminPin(Math.floor(1000 + Math.random() * 9000).toString())}
+                    className="text-[10px] text-emerald-700 font-bold hover:underline uppercase flex items-center gap-1 cursor-pointer"
+                  >
+                    ⚡ Generate Random PIN
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  required
+                  value={newAdminPin}
+                  onChange={(e) => setNewAdminPin(e.target.value)}
+                  placeholder="Enter 4-digit PIN"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg font-mono text-center tracking-widest text-base font-bold text-slate-900 outline-none focus:border-[#00923f]"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Give this PIN to the officer so they can unlock the administrative portal.
+                </p>
+              </div>
+
+              {addAdminMsg && (
+                <div
+                  className={`p-3 rounded-lg text-xs font-bold flex items-center gap-2 ${
+                    addAdminMsg.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                      : 'bg-rose-50 text-rose-800 border border-rose-200'
+                  }`}
+                >
+                  {addAdminMsg.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  )}
+                  <span>{addAdminMsg.text}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setAddAdminModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold uppercase tracking-wider cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-amber-300 rounded-lg text-xs font-bold uppercase tracking-wider shadow-sm flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4 text-amber-400" />
+                  <span>Register Officer</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete / Revoke Administrator Modal */}
+      {adminToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-rose-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 text-slate-900">
+            <div className="flex items-center gap-3 text-rose-600">
+              <AlertTriangle className="w-6 h-6" />
+              <h3 className="text-base font-extrabold uppercase tracking-tight text-slate-900">
+                Revoke Administrative Access
+              </h3>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed font-medium">
+              Are you sure you want to remove <strong>{adminToDelete.name}</strong> ({adminToDelete.role}) from the Electoral Commission? Their PIN code will no longer grant access to this portal.
+            </p>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setAdminToDelete(null)}
+                className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold uppercase tracking-wider cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = deleteAdministrator(adminToDelete.id);
+                  if (res.success && res.updatedState) {
+                    onRefreshState(res.updatedState);
+                    setAdminToDelete(null);
+                  } else {
+                    alert(res.message);
+                  }
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider shadow-sm cursor-pointer"
+              >
+                Confirm Removal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+        </main>
+      </div>
     </div>
   );
 };

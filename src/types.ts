@@ -40,6 +40,18 @@ export interface ElectionConfig {
   clubName: string;
   year: string;
   isLocked: boolean; // Admin can pause/lock voting
+  electionEndTime?: string | null; // ISO string when voting concludes
+  electionTimerActive?: boolean; // Whether scheduled end timer is active
+}
+
+export interface AdminAccount {
+  id: string; // e.g. 'admin-1', 'admin-2', 'admin-3'
+  name: string; // e.g. 'Chief Returning Officer (Admin 1)'
+  role: string; // e.g. 'Commission Chair'
+  pinHash: string; // Hashed PIN digest
+  isDefaultPin: boolean; // true if still using default '0000'
+  lastLoginAt?: string;
+  updatedAt?: string;
 }
 
 export interface ElectionState {
@@ -48,4 +60,5 @@ export interface ElectionState {
   votes: AnonymousVote[];
   candidates: Candidate[];
   positions: Position[];
+  admins?: AdminAccount[];
 }

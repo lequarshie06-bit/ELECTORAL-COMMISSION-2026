@@ -7,7 +7,7 @@ import { AdminLoginModal } from './components/AdminLoginModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { Footer } from './components/Footer';
 import { ElectionState, PositionId } from './types';
-import { loadElectionState, castAnonymousVote } from './services/storage';
+import { loadElectionState, castAnonymousVote, fetchServerElectionState } from './services/storage';
 
 export default function App() {
   const [electionState, setElectionState] = useState<ElectionState>(() => loadElectionState());
@@ -16,8 +16,15 @@ export default function App() {
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
   const [isAdminModalOpen, setIsAdminModalOpen] = useState<boolean>(false);
 
-  // Sync state across browser tabs and local updates
+  // Sync state across browser tabs, local updates, and Cloud Server
   useEffect(() => {
+    // Initial fetch from cloud backend
+    fetchServerElectionState().then((serverState) => {
+      if (serverState) {
+        setElectionState(serverState);
+      }
+    });
+
     const handleStateUpdate = (e: Event) => {
       const customEvent = e as CustomEvent<ElectionState>;
       if (customEvent.detail && customEvent.detail.candidates) {
@@ -30,9 +37,19 @@ export default function App() {
     window.addEventListener('storage', handleStateUpdate);
     window.addEventListener('ntd_election_updated', handleStateUpdate);
 
+    // Periodic cloud sync poll every 8 seconds
+    const interval = setInterval(() => {
+      fetchServerElectionState().then((serverState) => {
+        if (serverState) {
+          setElectionState(serverState);
+        }
+      });
+    }, 8000);
+
     return () => {
       window.removeEventListener('storage', handleStateUpdate);
       window.removeEventListener('ntd_election_updated', handleStateUpdate);
+      clearInterval(interval);
     };
   }, []);
 
@@ -94,6 +111,7 @@ export default function App() {
         onExitAdminMode={handleExitAdmin}
         onLogoutVoter={handleLogoutVoter}
         electionLocked={electionState.config.isLocked}
+        config={electionState.config}
       />
 
       {/* Main View Router */}

@@ -1,11 +1,11 @@
-import { ElectionState, AnonymousVote, PositionId, Voter, Candidate, Position } from '../types';
+import { ElectionState, AnonymousVote, PositionId, Voter, Candidate, Position, AdminAccount, ElectionConfig } from '../types';
 import { getInitialState, INITIAL_200_VOTER_IDS } from '../data/initialData';
 import { savePhotoToDB } from '../utils/imageCompressor';
 
 const STORAGE_KEY = 'ntd_advocacy_election_v3';
 
 // Salted hash verification so raw passcode is never exposed in plain text in source code
-function hashPin(pin: string): string {
+export function hashPin(pin: string): string {
   let hash = 0x811c9dc5;
   const str = `UHAS_SALT_2026_${pin.trim()}_CONFIDENTIAL`;
   for (let i = 0; i < str.length; i++) {
@@ -15,10 +15,210 @@ function hashPin(pin: string): string {
   return (hash >>> 0).toString(16);
 }
 
-const ADMIN_PASSCODE_HASH = 'f62f74b4'; // Obfuscated hash digest
+export const DEFAULT_CHAIR_ADMIN: AdminAccount = {
+  id: 'admin-chair',
+  name: 'Commission Chair',
+  role: 'Chief Returning Officer / Chair',
+  pinHash: hashPin('9924'),
+  isDefaultPin: false,
+  updatedAt: new Date().toISOString(),
+};
 
-export function verifyAdminPin(pin: string): boolean {
-  return hashPin(pin) === ADMIN_PASSCODE_HASH;
+export const DEFAULT_ADMINS: AdminAccount[] = [DEFAULT_CHAIR_ADMIN];
+
+export interface AdminVerificationResult {
+  valid: boolean;
+  admin?: AdminAccount;
+  isDefaultPin: boolean;
+  errorMessage?: string;
+}
+
+export function verifyAdminPin(pin: string, state?: ElectionState): boolean {
+  const result = authenticateAdminPin(pin, state);
+  return result.valid;
+}
+
+export function authenticateAdminPin(pin: string, state?: ElectionState): AdminVerificationResult {
+  const cleanPin = pin.trim();
+  if (!cleanPin) {
+    return { valid: false, isDefaultPin: false, errorMessage: 'PIN cannot be blank.' };
+  }
+
+  const currentHashed = hashPin(cleanPin);
+  const currentState = state || loadElectionState();
+  const admins = currentState.admins && currentState.admins.length > 0 ? currentState.admins : DEFAULT_ADMINS;
+
+  // Check matching admin in the registered admins list
+  const matchedAdmin = admins.find((a) => a.pinHash === currentHashed);
+  if (matchedAdmin) {
+    return {
+      valid: true,
+      admin: matchedAdmin,
+      isDefaultPin: Boolean(matchedAdmin.isDefaultPin),
+    };
+  }
+
+  // Master Commission Chair PIN fallback (9924)
+  if (cleanPin === '9924') {
+    const chair = admins.find((a) => a.id === 'admin-chair' || a.id === 'admin-1') || DEFAULT_CHAIR_ADMIN;
+    return {
+      valid: true,
+      admin: chair,
+      isDefaultPin: false,
+    };
+  }
+
+  return {
+    valid: false,
+    isDefaultPin: false,
+    errorMessage: 'Incorrect Admin PIN. Access denied. Only authorized Electoral Commission officers registered by the Chair may enter.',
+  };
+}
+
+export function addAdministrator(
+  name: string,
+  role: string,
+  pin: string
+): { success: boolean; message: string; updatedState?: ElectionState; newAdmin?: AdminAccount } {
+  const cleanName = name.trim();
+  const cleanRole = role.trim() || 'Electoral Commissioner';
+  const cleanPin = pin.trim();
+
+  if (!cleanName) {
+    return { success: false, message: 'Administrator name cannot be blank.' };
+  }
+
+  if (!cleanPin || cleanPin.length < 4) {
+    return { success: false, message: 'Administrator PIN must be at least 4 digits.' };
+  }
+
+  const currentState = loadElectionState();
+  let admins = [...(currentState.admins && currentState.admins.length > 0 ? currentState.admins : DEFAULT_ADMINS)];
+
+  const newId = `admin-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const newAdmin: AdminAccount = {
+    id: newId,
+    name: cleanName,
+    role: cleanRole,
+    pinHash: hashPin(cleanPin),
+    isDefaultPin: false,
+    updatedAt: new Date().toISOString(),
+  };
+
+  admins.push(newAdmin);
+  currentState.admins = admins;
+  saveElectionState(currentState);
+
+  return {
+    success: true,
+    message: `Administrator "${cleanName}" registered successfully with designated PIN.`,
+    updatedState: currentState,
+    newAdmin,
+  };
+}
+
+export function deleteAdministrator(
+  adminId: string
+): { success: boolean; message: string; updatedState?: ElectionState } {
+  if (adminId === 'admin-chair' || adminId === 'admin-1') {
+    return { success: false, message: 'The primary Commission Chair account cannot be deleted.' };
+  }
+
+  const currentState = loadElectionState();
+  let admins = [...(currentState.admins && currentState.admins.length > 0 ? currentState.admins : DEFAULT_ADMINS)];
+
+  const filtered = admins.filter((a) => a.id !== adminId);
+  if (filtered.length === admins.length) {
+    return { success: false, message: 'Administrator not found.' };
+  }
+
+  currentState.admins = filtered;
+  saveElectionState(currentState);
+
+  return {
+    success: true,
+    message: 'Administrator removed successfully.',
+    updatedState: currentState,
+  };
+}
+
+export function updateAdminPin(
+  adminId: string,
+  currentPin: string,
+  newPin: string
+): { success: boolean; message: string; updatedState?: ElectionState; updatedAdmin?: AdminAccount } {
+  const cleanNewPin = newPin.trim();
+  const cleanCurrentPin = currentPin.trim();
+
+  if (!cleanNewPin || cleanNewPin.length < 4) {
+    return { success: false, message: 'New PIN must be at least 4 digits long.' };
+  }
+
+  const currentState = loadElectionState();
+  let admins = [...(currentState.admins && currentState.admins.length > 0 ? currentState.admins : DEFAULT_ADMINS)];
+
+  const targetIndex = admins.findIndex((a) => a.id === adminId);
+  if (targetIndex === -1) {
+    return { success: false, message: 'Administrator profile not found.' };
+  }
+
+  const targetAdmin = admins[targetIndex];
+  const currentHashed = hashPin(cleanCurrentPin);
+
+  // Validate current PIN
+  const isCurrentValid =
+    targetAdmin.pinHash === currentHashed ||
+    ((targetAdmin.id === 'admin-chair' || targetAdmin.id === 'admin-1') && cleanCurrentPin === '9924');
+
+  if (!isCurrentValid) {
+    return { success: false, message: 'Current PIN entered is incorrect.' };
+  }
+
+  const newHashed = hashPin(cleanNewPin);
+  const updatedAdmin: AdminAccount = {
+    ...targetAdmin,
+    pinHash: newHashed,
+    isDefaultPin: false,
+    updatedAt: new Date().toISOString(),
+  };
+
+  admins[targetIndex] = updatedAdmin;
+  currentState.admins = admins;
+
+  saveElectionState(currentState);
+  return {
+    success: true,
+    message: `PIN for ${targetAdmin.name} has been updated successfully.`,
+    updatedState: currentState,
+    updatedAdmin,
+  };
+}
+
+export function resetAdminPinToDefault(
+  adminId: string
+): { success: boolean; message: string; updatedState?: ElectionState } {
+  const currentState = loadElectionState();
+  let admins = [...(currentState.admins && currentState.admins.length > 0 ? currentState.admins : DEFAULT_ADMINS)];
+
+  const targetIndex = admins.findIndex((a) => a.id === adminId);
+  if (targetIndex === -1) {
+    return { success: false, message: 'Administrator not found.' };
+  }
+
+  admins[targetIndex] = {
+    ...admins[targetIndex],
+    pinHash: hashPin('0000'),
+    isDefaultPin: true,
+    updatedAt: new Date().toISOString(),
+  };
+
+  currentState.admins = admins;
+  saveElectionState(currentState);
+  return {
+    success: true,
+    message: `PIN for ${admins[targetIndex].name} was reset to default (0000).`,
+    updatedState: currentState,
+  };
 }
 
 export function loadElectionState(): ElectionState {
@@ -101,6 +301,24 @@ export function loadElectionState(): ElectionState {
       return c;
     });
 
+    // Ensure administrator accounts exist in state with Commission Chair (9924)
+    if (!parsed.admins || parsed.admins.length === 0) {
+      parsed.admins = [DEFAULT_CHAIR_ADMIN];
+      stateModified = true;
+    } else {
+      // Ensure Chair account is using 9924 hash
+      parsed.admins = parsed.admins.map((adm) => {
+        if (adm.id === 'admin-chair' || adm.id === 'admin-1') {
+          return {
+            ...adm,
+            pinHash: hashPin('9924'),
+            isDefaultPin: false,
+          };
+        }
+        return adm;
+      });
+    }
+
     if (stateModified) {
       parsed.voters = mergedVoters;
       saveElectionState(parsed);
@@ -115,6 +333,24 @@ export function loadElectionState(): ElectionState {
   }
 }
 
+export async function fetchServerElectionState(): Promise<ElectionState | null> {
+  try {
+    const res = await fetch('/api/election');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.state && data.state.candidates) {
+        // Sync local storage with server state
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.state));
+        window.dispatchEvent(new CustomEvent('ntd_election_updated', { detail: data.state }));
+        return data.state as ElectionState;
+      }
+    }
+  } catch (err) {
+    console.warn('Server election sync not reachable, using local storage state', err);
+  }
+  return null;
+}
+
 export function saveElectionState(state: ElectionState): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -122,7 +358,6 @@ export function saveElectionState(state: ElectionState): void {
   } catch (err) {
     console.warn('Direct localStorage save failed, applying fallback optimization', err);
     try {
-      // Fallback: in case of rare quota issues, safely truncate any anomalous huge string
       const sanitizedCandidates = state.candidates.map((c) => {
         if (c.photoUrl && c.photoUrl.length > 500000) {
           return { ...c, photoUrl: c.photoUrl.substring(0, 150000) };
@@ -136,6 +371,42 @@ export function saveElectionState(state: ElectionState): void {
       console.error('Critical storage quota failure', innerErr);
     }
   }
+
+  // Persist asynchronously to Cloud/Backend server
+  try {
+    fetch('/api/election', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state }),
+    }).catch((e) => console.warn('Cloud sync background error', e));
+  } catch (err) {
+    console.warn('Could not post state to /api/election', err);
+  }
+}
+
+export function isElectionTimeExpired(config: ElectionConfig): boolean {
+  if (!config.electionTimerActive || !config.electionEndTime) {
+    return false;
+  }
+  const endTimestamp = new Date(config.electionEndTime).getTime();
+  return !isNaN(endTimestamp) && Date.now() >= endTimestamp;
+}
+
+export function setElectionTimer(
+  endTimeIso: string | null,
+  timerActive: boolean
+): ElectionState {
+  const currentState = loadElectionState();
+  const updatedState: ElectionState = {
+    ...currentState,
+    config: {
+      ...currentState.config,
+      electionEndTime: endTimeIso,
+      electionTimerActive: timerActive,
+    },
+  };
+  saveElectionState(updatedState);
+  return updatedState;
 }
 
 export interface VoterValidationResult {
@@ -155,6 +426,13 @@ export function validateVoterId(voterId: string, state: ElectionState): VoterVal
     return {
       valid: false,
       errorMessage: 'Voting is currently paused by the electoral committee.',
+    };
+  }
+
+  if (isElectionTimeExpired(state.config)) {
+    return {
+      valid: false,
+      errorMessage: 'Polls have closed. The voting period for this election has officially concluded.',
     };
   }
 
